@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -106,19 +107,24 @@ def main():
 
     # --- 3. Activate Config (Silently) ---
     configs = run_command(
-        f"gcloud config configurations describe {config_name}", ignore_errors=True
+        f"gcloud config configurations describe {shlex.quote(config_name)}",
+        ignore_errors=True,
     )
     if not configs:
-        run_command(f"gcloud config configurations create {config_name} --quiet")
+        run_command(
+            f"gcloud config configurations create {shlex.quote(config_name)} --quiet"
+        )
 
-    run_command(f"gcloud config configurations activate {config_name} --quiet")
-    run_command(f"gcloud config set account {target_email} --quiet")
+    run_command(
+        f"gcloud config configurations activate {shlex.quote(config_name)} --quiet"
+    )
+    run_command(f"gcloud config set account {shlex.quote(target_email)} --quiet")
 
     # Verify Core Authentication
     check_auth = run_command("gcloud auth print-access-token", ignore_errors=True)
     if not check_auth:
         print(f"Authenticating core gcloud for {target_email}...")
-        auth_cmd = f"gcloud auth login '{target_email}'"
+        auth_cmd = f"gcloud auth login {shlex.quote(target_email)}"
         if no_launch_browser:
             auth_cmd += " --no-launch-browser"
         run_command(auth_cmd, capture_output=False)
@@ -149,7 +155,7 @@ def main():
             sys.exit(1)
 
     # --- 5. Apply Changes Silently ---
-    run_command(f"gcloud config set project {target_project} --quiet")
+    run_command(f"gcloud config set project {shlex.quote(target_project)} --quiet")
 
     # Sync ADC
     print("Syncing Application Default Credentials...")
@@ -160,13 +166,13 @@ def main():
     adc_account = get_adc_email(adc_token) if adc_token else None
 
     if adc_account != target_email:
-        adc_cmd = f"gcloud auth application-default login '{target_email}'"
+        adc_cmd = f"gcloud auth application-default login {shlex.quote(target_email)}"
         if no_launch_browser:
             adc_cmd += " --no-launch-browser"
         run_command(adc_cmd, capture_output=False)
 
     run_command(
-        f"gcloud auth application-default set-quota-project {target_project} --quiet 2>/dev/null",
+        f"gcloud auth application-default set-quota-project {shlex.quote(target_project)} --quiet 2>/dev/null",
         ignore_errors=True,
     )
 
@@ -185,7 +191,7 @@ def main():
                     c_name = sel_c.split("|")[0].strip()
                     c_loc = sel_c.split("|")[1].strip()
                     run_command(
-                        f"gcloud container clusters get-credentials {c_name} --location {c_loc} >/dev/null 2>&1"
+                        f"gcloud container clusters get-credentials {shlex.quote(c_name)} --location {shlex.quote(c_loc)} >/dev/null 2>&1"
                     )
 
     print("-" * 48)
