@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+
+USER_EMAIL = os.environ.get("GSWITCH_USER_EMAIL", "gswitch@gmail.com")
+PROJECT_PREFIX = os.environ.get("GSWITCH_PREFIX", "")
+
+
+def run_command(cmd, capture_output=True, ignore_errors=False):
+    """Run a shell command and return its output."""
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=capture_output, text=True
+        )
+        if not ignore_errors and result.returncode != 0:
+            return None
+        return result.stdout.strip() if capture_output else None
+    except Exception:
+        return None
+
+
+def ask_input(prompt):
+    """Ask user for input, printing prompt to stdout."""
+    print(prompt, end="", flush=True)
+    return sys.stdin.readline().strip()
+
+
+def fzf_select(options, header, height=15):
+    """FZF select with fallback to console prompt."""
+    if shutil.which("fzf"):
+        cmd = ["fzf", f"--header={header}", f"--height={height}", "--reverse"]
+        try:
+            process = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+            )
+            stdout, _ = process.communicate(input="\n".join(options))
+            if process.returncode == 0:
+                return stdout.strip()
+            return None
+        except Exception:
+            return None
+    else:
+        print(f"--- {header} ---")
+        for i, opt in enumerate(options, 1):
+            print(f"{i}) {opt}")
+        while True:
+            try:
+                choice_str = ask_input("Select number: ")
+                choice = int(choice_str)
+                if 1 <= choice <= len(options):
+                    return options[choice - 1]
+            except ValueError:
+                pass
+            print("Invalid selection.")
+
+
+def get_adc_email(token):
+    """Get the email associated with an access token."""
+    if not token:
+        return None
+    url = f"https://oauth2.googleapis.com/tokeninfo?access_token={token}"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+            return data.get("email")
+    except urllib.error.URLError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
+def main():
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print("Usage: python3 gswitch [project_id] [--no-launch-browser]")
+        print("\nOptions:")
+        print(f"  project_id           Optional suffix to append to prefix (current prefix: '{PROJECT_PREFIX}')")
+        print("  --no-launch-browser  Do not launch the browser; print a URL to copy-paste instead")
+        print("  -h, --help           Show this help message and exit")
+        sys.exit(0)
+
+    custom_browser = os.environ.get("GSWITCH_BROWSER")
+    if custom_browser:
+        os.environ["BROWSER"] = custom_browser
+    no_launch_browser = "--no-launch-browser" in sys.argv
+    if no_launch_browser:
+        sys.argv.remove("--no-launch-browser")
+    if "--browser" in sys.argv:
+        sys.argv.remove("--browser")
+
+    project_arg = None
+    if len(sys.argv) > 1:
+        project_arg = sys.argv[1]
+
+    target_email = USER_EMAIL
+    config_name = "gswitch"
+
+    # --- 3. Activate Config (Silently) ---
+    configs = run_command(
+        f"gcloud config configurations describe {config_name}", ignore_errors=True
+    )
+    if not configs:
+        run_command(f"gcloud config configurations create {config_name} --quiet")
+
+    run_command(f"gcloud config configurations activate {config_name} --quiet")
+    run_command(f"gcloud config set account {target_email} --quiet")
+
+    # Verify Core Authentication
+    check_auth = run_command("gcloud auth print-access-token", ignore_errors=True)
+    if not check_auth:
+        print(f"Authenticating core gcloud for {target_email}...")
+        auth_cmd = f"gcloud auth login '{target_email}'"
+        if no_launch_browser:
+            auth_cmd += " --no-launch-browser"
+        run_command(auth_cmd, capture_output=False)
+
+    # --- 4. Project Selection (Silenced All Notices) ---
+    if project_arg:
+        target_project = f"{PROJECT_PREFIX}{project_arg}"
+    else:
+        print(f"Fetching projects for {target_email}...")
+        raw_projects = run_command(
+            "gcloud projects list --filter='lifecycleState=ACTIVE' --format=\"value[separator=' | '](projectId, name)\" 2>/dev/null",
+            ignore_errors=True,
+        )
+
+        options = ["Manual Entry"]
+        if raw_projects:
+            options.extend([line for line in raw_projects.split("\n") if line.strip()])
+
+        selected = fzf_select(options, f"Select Project ({target_email})", height=15)
+        if not selected:
+            sys.exit(1)
+
+        target_project = selected.split("|")[0].strip()
+        if selected == "Manual Entry" or not target_project:
+            target_project = ask_input("Enter Project ID: ")
+
+        if not target_project:
+            sys.exit(1)
+
+    # --- 5. Apply Changes Silently ---
+    run_command(f"gcloud config set project {target_project} --quiet")
+
+    # Sync ADC
+    print("Syncing Application Default Credentials...")
+    adc_token = run_command(
+        "gcloud auth application-default print-access-token 2>/dev/null",
+        ignore_errors=True,
+    )
+    adc_account = get_adc_email(adc_token) if adc_token else None
+
+    if adc_account != target_email:
+        adc_cmd = f"gcloud auth application-default login '{target_email}'"
+        if no_launch_browser:
+            adc_cmd += " --no-launch-browser"
+        run_command(adc_cmd, capture_output=False)
+
+    run_command(
+        f"gcloud auth application-default set-quota-project {target_project} --quiet 2>/dev/null",
+        ignore_errors=True,
+    )
+
+    # --- 6. Kubernetes Context (Silently) ---
+    if shutil.which("kubectl"):
+        clusters_raw = run_command(
+            "gcloud container clusters list --format=\"value[separator=' | '](name, location)\" 2>/dev/null",
+            ignore_errors=True,
+        )
+        if clusters_raw:
+            clusters = [line for line in clusters_raw.split("\n") if line.strip()]
+            if clusters:
+                print("Select GKE Cluster (ESC to skip):")
+                sel_c = fzf_select(clusters, "Select GKE Cluster", height=10)
+                if sel_c:
+                    c_name = sel_c.split("|")[0].strip()
+                    c_loc = sel_c.split("|")[1].strip()
+                    run_command(
+                        f"gcloud container clusters get-credentials {c_name} --location {c_loc} >/dev/null 2>&1"
+                    )
+
+    print("-" * 48)
+    print(f"✅ Done! Account: {target_email} | Project: {target_project}")
+
+    if shutil.which("oh-my-posh"):
+        run_command("oh-my-posh notice", capture_output=False, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
