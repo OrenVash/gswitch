@@ -41,8 +41,8 @@ gswitch
 ### Direct Switch (Shortcut)
 Provide a suffix to immediately switch to a project using the prefix defined in `GSWITCH_PREFIX` (defaults to none):
 ```bash
-# If GSWITCH_PREFIX="gcpprefix"
-gswitch dev  # Switches to gcpprefixdev
+# If GSWITCH_PREFIX="gcpprefix-"
+gswitch dev  # Switches to gcpprefix-dev
 
 # If GSWITCH_PREFIX is not set
 gswitch my-project  # Switches to my-project
@@ -82,7 +82,7 @@ You can override the default user email and project prefix by setting environmen
 
 ```bash
 export GSWITCH_USER_EMAIL="gswitch@gmail.com"
-export GSWITCH_PREFIX="gcpprefix"
+export GSWITCH_PREFIX="gcpprefix-"
 export GSWITCH_BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
