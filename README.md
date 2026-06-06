@@ -97,6 +97,5 @@ export GSWITCH_BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Ch
 ---
 
 ## 📜 Metadata
-- **Author**: benji-cinnamon
 - **Language**: Python 3
 - **Location**: `~/.config/bin/gswitch`
